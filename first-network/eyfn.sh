@@ -218,7 +218,25 @@ function generateChannelArtifacts() {
   echo
 }
 
+function networkStop () {
 
+if [ "${IF_COUCHDB}" == "couchdb" ]; then
+    docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_ORG3 -f $COMPOSE_FILE_COUCH stop 
+  else
+    docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_ORG3 stop
+fi
+
+}
+
+function networkStart () {
+
+  if [ "${IF_COUCHDB}" == "couchdb" ]; then
+    docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_ORG3 -f $COMPOSE_FILE_COUCH start 
+  else
+    docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_ORG3 start
+fi
+
+}
 # If BYFN wasn't run abort
 if [ ! -d crypto-config ]; then
   echo
@@ -264,6 +282,10 @@ elif [ "$MODE" == "restart" ]; then
   EXPMODE="Restarting"
 elif [ "$MODE" == "generate" ]; then
   EXPMODE="Generating certs and genesis block for"
+elif [ "$MODE" == "start" ]; then
+  EXPMODE="stopping but retaining state of containers"
+elif [ "$MODE" == "stop" ]; then
+  EXPMODE="starting and resuming from state of containers"
 else
   printHelp
   exit 1
@@ -316,6 +338,10 @@ elif [ "${MODE}" == "generate" ]; then ## Generate Artifacts
 elif [ "${MODE}" == "restart" ]; then ## Restart the network
   networkDown
   networkUp
+elif [ "${MODE}" == "stop" ]; then 
+  networkStop
+elif [ "${MODE}" == "start" ]; then 
+  networkStart
 else
   printHelp
   exit 1
