@@ -49,6 +49,7 @@ function printHelp() {
   echo "    -s <dbtype> - the database backend to use: goleveldb (default) or couchdb"
   echo "    -l <language> - the chaincode language: golang (default) or node"
   echo "    -i <imagetag> - the tag to be used to launch the network (defaults to \"latest\")"
+  echo "    -a - specify if you want to start the BYFN Fabric CAs as well"
   echo "    -v - verbose mode"
   echo "  byfn.sh -h (print this message)"
   echo
@@ -61,6 +62,7 @@ function printHelp() {
   echo "	byfn.sh up -l node"
   echo "	byfn.sh down -c mychannel"
   echo "        byfn.sh upgrade -c mychannel"
+  echo "	byfn.sh -m up -a"
   echo
   echo "Taking all defaults:"
   echo "	byfn.sh generate"
@@ -155,11 +157,20 @@ function networkUp() {
     replacePrivateKey
     generateChannelArtifacts
   fi
-  if [ "${IF_COUCHDB}" == "couchdb" ]; then
-    IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH up -d 2>&1
-  else
-    IMAGE_TAG=$IMAGETAG docker-compose -f $COMPOSE_FILE up -d 2>&1
+  
+  COMPOSE_FILE_ADDITIONS=""   # added for BYFN adding 2 x CAs
+
+  if [ "${IF_CAS}" == "1" ]; then
+      COMPOSE_FILE_ADDITIONS="${COMPOSE_FILE_ADDITIONS} -f $COMPOSE_FILE_CAS "
   fi
+  
+  if [ "${IF_COUCHDB}" == "couchdb" ]; then
+    IMAGE_TAG=$IMAGETAG docker-compose -f ${COMPOSE_FILE}${COMPOSE_FILE_ADDITIONS} -f $COMPOSE_FILE_COUCH up -d 2>&1
+  else
+    IMAGE_TAG=$IMAGETAG docker-compose -f ${COMPOSE_FILE}${COMPOSE_FILE_ADDITIONS} up -d 2>&1
+  fi
+  
+  
   if [ $? -ne 0 ]; then
     echo "ERROR !!!! Unable to start network"
     exit 1
@@ -236,6 +247,9 @@ function networkDown() {
   # stop org3 containers also in addition to org1 and org2, in case we were running sample to add org3
   docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_COUCH -f $COMPOSE_FILE_ORG3 down --volumes --remove-orphans
 
+  if [ -f ${COMPOSE_FILE_CAS} ]; then
+     docker-compose -f $COMPOSE_FILE -f $COMPOSE_FILE_CAS down --volumes
+  fi
   # Don't remove the generated artifacts -- note, the ledgers are always removed
   if [ "$MODE" != "restart" ]; then
     # Bring down the network, deleting the volumes
@@ -267,6 +281,8 @@ function replacePrivateKey() {
 
   # Copy the template to the file that will be modified to add the private key
   cp docker-compose-e2e-template.yaml docker-compose-e2e.yaml
+  cp docker-compose-cas-template.yaml docker-compose-cas.yaml
+  # already have a CA3 yaml file - just for Org 3's CA FYI
 
   # The next steps will replace the template's contents with the
   # actual values of the private key file names for the two CAs.
@@ -278,10 +294,10 @@ function replacePrivateKey() {
   cd crypto-config/peerOrganizations/org2.example.com/ca/
   PRIV_KEY=$(ls *_sk)
   cd "$CURRENT_DIR"
-  sed $OPTS "s/CA2_PRIVATE_KEY/${PRIV_KEY}/g" docker-compose-e2e.yaml
+  sed $OPTS "s/CA2_PRIVATE_KEY/${PRIV_KEY}/g" docker-compose-e2e.yaml docker-compose-cas.yaml 
   # If MacOSX, remove the temporary backup of the docker-compose file
   if [ "$ARCH" == "Darwin" ]; then
-    rm docker-compose-e2e.yamlt
+    rm docker-compose-e2e.yamlt docker-compose-cas.yamlt
   fi
 }
 
@@ -428,6 +444,35 @@ function generateChannelArtifacts() {
   echo
 }
 
+## Added, so that users can 'pause' after doing BYFN if they wish, then resume another day to carry on with EYFN and composer-y stuff
+function networkStop () {
+
+   if [ "${IF_COUCHDB}" == "couchdb" ]; then
+       docker-compose -f $COMPOSE_FILE  -f $COMPOSE_FILE_COUCH stop 
+   else
+       docker-compose -f $COMPOSE_FILE stop
+   fi
+
+   if [ "${IF_CAS}" == "1" ]; then
+       docker-compose -f $COMPOSE_FILE_CAS stop
+   fi
+}
+
+function networkStart () {
+
+   if [ "${IF_COUCHDB}" == "couchdb" ]; then
+       docker-compose -f $COMPOSE_FILE  -f $COMPOSE_FILE_COUCH start 
+   else
+       docker-compose -f $COMPOSE_FILE start
+   fi
+
+   if [ "${IF_CAS}" == "1" ]; then
+          docker-compose -f $COMPOSE_FILE_CAS start
+   fi
+
+}
+
+
 # Obtain the OS and Architecture string that will be used to select the correct
 # native binaries for your platform, e.g., darwin-amd64 or linux-amd64
 OS_ARCH=$(echo "$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/mingw64_nt.*/windows/')-$(uname -m | sed 's/x86_64/amd64/g')" | awk '{print tolower($0)}')
@@ -442,6 +487,11 @@ CHANNEL_NAME="mychannel"
 COMPOSE_FILE=docker-compose-cli.yaml
 #
 COMPOSE_FILE_COUCH=docker-compose-couch.yaml
+
+COMPOSE_FILE_CAS=docker-compose-cas.yaml
+
+COMPOSE_FILE_CA3=docker-compose-ca3.yaml
+
 # org3 docker compose file
 COMPOSE_FILE_ORG3=docker-compose-org3.yaml
 #
@@ -455,7 +505,7 @@ if [ "$1" = "-m" ]; then # supports old usage, muscle memory is powerful!
 fi
 MODE=$1
 shift
-# Determine whether starting, stopping, restarting, generating or upgrading
+# Determine whether starting, stopping, restarting or generating for announce
 if [ "$MODE" == "up" ]; then
   EXPMODE="Starting"
 elif [ "$MODE" == "down" ]; then
@@ -463,15 +513,19 @@ elif [ "$MODE" == "down" ]; then
 elif [ "$MODE" == "restart" ]; then
   EXPMODE="Restarting"
 elif [ "$MODE" == "generate" ]; then
-  EXPMODE="Generating certs and genesis block"
+  EXPMODE="Generating certs and genesis block for"
 elif [ "$MODE" == "upgrade" ]; then
   EXPMODE="Upgrading the network"
+elif [ "${MODE}" == "stop" ] ; then # ie docker-compose stop 
+  EXPMODE="Stopping but preserving container state"
+elif  [ "${MODE}" == "start" ] ; then # ie docker-compose start
+   EXPMODE="Starting from previous stopped container state"
 else
   printHelp
   exit 1
 fi
 
-while getopts "h?c:t:d:f:s:l:i:v" opt; do
+while getopts "h?m:c:t:d:f:s:l:i:a?" opt; do
   case "$opt" in
   h | \?)
     printHelp
@@ -498,6 +552,8 @@ while getopts "h?c:t:d:f:s:l:i:v" opt; do
   i)
     IMAGETAG=$(go env GOARCH)"-"$OPTARG
     ;;
+  a)  IF_CAS=1
+   ;;
   v)
     VERBOSE=true
     ;;
@@ -507,11 +563,17 @@ done
 
 # Announce what was requested
 
+ADDITIONS=""
+
+  if [ "${IF_CAS}" == "1" ]; then
+    ADDITIONS="${ADDITIONS} and using Fabric CAs"
+fi
+
 if [ "${IF_COUCHDB}" == "couchdb" ]; then
   echo
-  echo "${EXPMODE} for channel '${CHANNEL_NAME}' with CLI timeout of '${CLI_TIMEOUT}' seconds and CLI delay of '${CLI_DELAY}' seconds and using database '${IF_COUCHDB}'"
+  echo "${EXPMODE} for channel '${CHANNEL_NAME}' with CLI timeout of '${CLI_TIMEOUT}' seconds and CLI delay of '${CLI_DELAY}' seconds and using database '${IF_COUCHDB}',  ${ADDITIONS}"
 else
-  echo "${EXPMODE} for channel '${CHANNEL_NAME}' with CLI timeout of '${CLI_TIMEOUT}' seconds and CLI delay of '${CLI_DELAY}' seconds"
+  echo "${EXPMODE} for channel '${CHANNEL_NAME}' with CLI timeout of '${CLI_TIMEOUT}' seconds and CLI delay of '${CLI_DELAY}' seconds,  ${ADDITIONS}"
 fi
 # ask for confirmation to proceed
 askProceed
@@ -530,6 +592,10 @@ elif [ "${MODE}" == "restart" ]; then ## Restart the network
   networkUp
 elif [ "${MODE}" == "upgrade" ]; then ## Upgrade the network from version 1.1.x to 1.2.x
   upgradeNetwork
+elif [ "${MODE}" == "stop" ] ; then # do docker-compose stop 
+  networkStop
+elif  [ "${MODE}" == "start" ] ; then # do docker-compose start
+  networkStart 
 else
   printHelp
   exit 1
