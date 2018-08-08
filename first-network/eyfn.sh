@@ -95,6 +95,7 @@ function networkUp () {
   # generate artifacts if they don't exist
   if [ ! -d "org3-artifacts/crypto-config" ]; then
     generateCerts
+    replacePrivateKey
     generateChannelArtifacts
     createConfigTx
   fi
@@ -216,6 +217,30 @@ function generateChannelArtifacts() {
   )
   cp -r crypto-config/ordererOrganizations org3-artifacts/crypto-config/
   echo
+}
+
+function replacePrivateKey() {
+
+# sed on MacOSX does not support -i flag with a null extension. We will use
+  # 't' for our back-up's extension and delete it at the end of the function
+  ARCH=`uname -s | grep Darwin`
+  if [ "$ARCH" == "Darwin" ]; then
+    OPTS="-it"
+  else
+    OPTS="-i"
+  fi
+
+# Copy the template to the file that will be modified to add the private key
+ 
+  cp docker-compose-ca3-template.yaml docker-compose-ca3.yaml
+  
+  CURRENT_DIR=$PWD
+  
+  cd org3-artifacts/crypto-config/peerOrganizations/org3.example.com/ca/
+  PRIV_KEY=$(ls *_sk)
+  cd "$CURRENT_DIR"
+  sed $OPTS "s/CA3_PRIVATE_KEY/${PRIV_KEY}/g" docker-compose-ca3.yaml 
+
 }
 
 function networkStop () {
